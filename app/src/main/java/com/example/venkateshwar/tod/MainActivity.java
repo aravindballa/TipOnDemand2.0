@@ -2,13 +2,21 @@ package com.example.venkateshwar.tod;
 
 
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.*;
 import android.support.annotation.NonNull;
+import android.support.design.widget.FloatingActionButton;
+import android.support.design.widget.NavigationView;
+import android.support.v4.widget.DrawerLayout;
+import android.support.v7.app.ActionBarDrawerToggle;
+import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
+import android.support.v7.widget.Toolbar;
+import android.text.InputType;
 import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
 import android.view.Menu;
@@ -37,6 +45,7 @@ import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.auth.GoogleAuthProvider;
 import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseException;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.database.GenericTypeIndicator;
@@ -45,21 +54,31 @@ import com.google.firebase.database.ValueEventListener;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.Queue;
+import java.util.Set;
 
-public class MainActivity extends AppCompatActivity {
-    ArrayList<Learning> arrayList = new ArrayList<>();
+public class MainActivity extends AppCompatActivity
+        implements NavigationView.OnNavigationItemSelectedListener{
 
+    private DrawerLayout mDrawerLayout;
+    private ActionBarDrawerToggle mToggle;
+    private Toolbar mToolbar;
+
+    View header;
+
+    static LearningCollection arrayList;
+    ArrayList<Learning> cloudCopy;
 
     private FirebaseAuth mAuth;
+    private FirebaseAuth.AuthStateListener mAuthListener;
 
-    ImageButton gimme, add, all;
+    ImageButton gimme, all;
     TextView textView;
-    EditText editText;
     DatabaseReference mDatabase;
-    DatabaseReference mLearnings;
+    DatabaseReference mLearnings, mlastUpdated;
     //    SignInButton signInButton;
     private static final int RC_SIGN_IN = 1;
     private GoogleApiClient mGoogleApiClient;
@@ -67,91 +86,106 @@ public class MainActivity extends AppCompatActivity {
     TextView uname;
     String username;
 
+    static Date lastUpdated = new Date();
+    Date mlast = new Date();
+
+    void syncItOff(FirebaseUser tempuser) {
+        if (tempuser != null) {
+            Toast.makeText(MainActivity.this, "Trying to sync...", Toast.LENGTH_SHORT).show();
+            user = tempuser;
+            username = user.getDisplayName();
+            DatabaseReference temp = mDatabase.child("users").child("nimda");
+
+            mLearnings = mDatabase.child("users").child(user.getUid()).child("learnings");
+
+            mlastUpdated = mDatabase.child("users").child(user.getUid()).child("lastUpdated");
+
+            mlastUpdated.addValueEventListener(new ValueEventListener() {
+                @Override
+                public void onDataChange(DataSnapshot dataSnapshot) {
+                    mlast = dataSnapshot.getValue(Date.class);
+                }
+
+                @Override
+                public void onCancelled(DatabaseError databaseError) {
+
+                }
+            });
+
+            mLearnings.addListenerForSingleValueEvent(new ValueEventListener() {
+                @Override
+                public void onDataChange(DataSnapshot dataSnapshot) {
+                    Toast.makeText(MainActivity.this, "Data fetched...", Toast.LENGTH_SHORT).show();
+                    GenericTypeIndicator<ArrayList<Learning>> typeIndicator = new GenericTypeIndicator<ArrayList<Learning>>() {
+                    };
+                    ArrayList<Learning> cloudCopy = dataSnapshot.getValue(typeIndicator);
+                    if(cloudCopy != null) {
+                        for (Learning x : cloudCopy) {
+                            arrayList.add(x);
+                        }
+                        Toast.makeText(MainActivity.this, "Data synced", Toast.LENGTH_SHORT).show();
+                        arrayList.sort();
+                    }
+                }
+
+                @Override
+                public void onCancelled(DatabaseError databaseError) {
+
+                }
+            });
+
+            // User is signed in
+            if (temp == null)
+                Toast.makeText(getApplicationContext(), "Logged in as " + user.getDisplayName() + mLearnings.toString(), Toast.LENGTH_LONG).show();
+            uname.setText(user.getDisplayName());
+
+
+        } else {
+            // User is signed out
+            uname.setText("");
+
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         mAuth = FirebaseAuth.getInstance();
-        uname = (TextView) findViewById(R.id.uname);
-        //instantiate local firebase and make it persistent offline B]
-        FirebaseDatabase.getInstance().setPersistenceEnabled(true);
+
+        mToolbar = (Toolbar) findViewById(R.id.nav_actionbar);
+        setSupportActionBar(mToolbar);
+
+        mDrawerLayout = (DrawerLayout) findViewById(R.id.drawerlayout);
+        mToggle = new ActionBarDrawerToggle(this, mDrawerLayout, R.string.open, R.string.close);
+        mDrawerLayout.addDrawerListener(mToggle);
+        mToggle.syncState();
+
+        getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+
+        NavigationView navigationView = (NavigationView) findViewById(R.id.nav_view);
+        //navigationView.setNavigationItemSelectedListener(this);
+        header = navigationView.getHeaderView(0);
+        uname = (TextView) header.findViewById(R.id.uname);
+
+        navigationView.setNavigationItemSelectedListener(this);
+
+
         mDatabase = FirebaseDatabase.getInstance().getReference();
         gimme = (ImageButton) findViewById(R.id.button);
-        add = (ImageButton) findViewById(R.id.button2);
         all = (ImageButton) findViewById(R.id.button3);
         textView = (TextView) findViewById(R.id.textView);
-        editText = (EditText) findViewById(R.id.editText);
         user = mAuth.getCurrentUser();
-        uname.setTextColor(Color.BLACK);
+        arrayList = new LearningCollection();
 
 
-        FirebaseAuth.AuthStateListener mAuthListener = new FirebaseAuth.AuthStateListener() {
+        mAuthListener = new FirebaseAuth.AuthStateListener() {
             @Override
             public void onAuthStateChanged(@NonNull FirebaseAuth firebaseAuth) {
-                FirebaseUser tempuser = firebaseAuth.getCurrentUser();
-                if (tempuser != null) {
-                    user = tempuser;
-                    username = user.getDisplayName();
-//                    DatabaseReference firebaseDatabase=mDatabase;
-//                    firebaseDatabase.child("users").push();
-                    DatabaseReference temp = mDatabase.child("users").child("nimda");
-
-                    mLearnings = mDatabase.child("users").child(user.getUid());
-                    mLearnings.keepSynced(true);
-
-                    mLearnings.addValueEventListener(new ValueEventListener() {
-                        @Override
-                        public void onDataChange(DataSnapshot dataSnapshot) {
-                            GenericTypeIndicator<List<Learning>> typeIndicator = new GenericTypeIndicator<List<Learning>>() {
-                            };
-                            List<Learning> cloudCopy = dataSnapshot.getValue(typeIndicator);
-                            if (cloudCopy != null) {
-                                boolean flag = false;
-                                int i = 0, j = 0;
-                                while (i < cloudCopy.size()) {
-                                    while (j < arrayList.size()) {
-                                        if (cloudCopy.get(i).getCreated() == arrayList.get(j).getCreated() && cloudCopy.get(i).getData() == arrayList.get(j).getData()) {
-                                            flag = true;
-                                        }
-
-                                        j++;
-                                    }
-                                    if (!flag) {
-                                        arrayList.add(cloudCopy.get(i));
-                                    }
-                                    i++;
-                                }
-                            }
-                            mLearnings.setValue(arrayList);
-                            Toast.makeText(getApplicationContext(), "Successfully Added to Cloud Too!", Toast.LENGTH_LONG).show();
-                        }
-
-                        @Override
-                        public void onCancelled(DatabaseError databaseError) {
-
-                        }
-                    });
-
-                    // User is signed in
-                    if (temp == null)
-                        Toast.makeText(getApplicationContext(), "Logged in as " + user.getDisplayName() + mLearnings.toString(), Toast.LENGTH_LONG).show();
-                    uname.setText(user.getDisplayName());
-                } else {
-                    // User is signed out
-                    uname.setText("");
-                }
+                syncItOff(firebaseAuth.getCurrentUser());
             }
         };
-        if (user != null)
-            mLearnings = mDatabase.child("users").child(user.getUid());
 
-//keep the learnings synced offline
-        if (mLearnings != null && user != null) {
-            mLearnings.keepSynced(true);
-        }
-
-        mAuth.addAuthStateListener(mAuthListener);
         // Configure Google Sign In
         GoogleSignInOptions gso = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                 .requestIdToken(getString(R.string.webclientid))
@@ -161,7 +195,7 @@ public class MainActivity extends AppCompatActivity {
                 .enableAutoManage(this, new GoogleApiClient.OnConnectionFailedListener() {
                     @Override
                     public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
-
+                        Log.d("AB", "Connection failed");
                     }
                 })
                 .addApi(Auth.GOOGLE_SIGN_IN_API, gso)
@@ -194,31 +228,13 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         }
-        if (add != null) {
-            add.setOnLongClickListener(new View.OnLongClickListener() {
-                @Override
-                public boolean onLongClick(View v) {
-                    Toast.makeText(getApplicationContext(), "Add", Toast.LENGTH_SHORT).show();
-                    return true;
-                }
-            });
-        }
 
         if (all != null && textView != null) {
             all.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-                    inputMethodManager.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), InputMethodManager.HIDE_NOT_ALWAYS);
-                    StringBuffer s1 = new StringBuffer();
-                    int i = 0;
-
-                    for (Learning str : arrayList) {
-                        s1.append(i + 1 + ". " + str.toString() + "\n");
-                        i++;
-                    }
-                    textView.setText(s1);
-
+                Intent intent = new Intent(MainActivity.this, TipListActivity.class);
+                startActivity(intent);
                 }
             });
         }
@@ -227,50 +243,87 @@ public class MainActivity extends AppCompatActivity {
             gimme.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-                    inputMethodManager.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), InputMethodManager.HIDE_NOT_ALWAYS);
-                    if (arrayList.size() > 0) {
-                        int x = (int) (Math.random() * arrayList.size());
-                        assert textView != null;
-                        textView.setText(arrayList.get(x).getData());
-                    }
+                    getATip();
                 }
             });
         }
-        if (add != null) {
-            add.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-                    inputMethodManager.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), InputMethodManager.HIDE_NOT_ALWAYS);
-                    String s = editText.getText().toString().trim();
-                    try {
-                        if (s.isEmpty()) {
-                            Toast.makeText(getApplicationContext(), "Oy! Write something.", Toast.LENGTH_LONG).show();
-                            throw new Exception();
-                        }
-                        for (Learning learning : arrayList) {
-                            if (learning.getData().equals(s)) {
-                                Toast.makeText(getApplicationContext(), "This one already exists.", Toast.LENGTH_LONG).show();
-                                throw new Exception();
-                            }
-                        }
-                        arrayList.add(new Learning(s));
-//                        editText.clearFocus();
-                        editText.setText("");
-                        if (mLearnings != null)
-                            mLearnings.setValue(arrayList);
-                    } catch (Exception e) {
-                        Log.e("Exception", "File write failed: " + e.toString());
+
+        FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.floatingActionButton);
+        fab.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                addATip();
+            }
+        });
+
+
+    }
+
+    void addATip() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Enter the tip");
+
+        // Set up the input
+        final EditText input = new EditText(this);
+        // Specify the type of input expected; this, for example, sets the input as a password, and will mask the text
+        input.setInputType(InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        builder.setView(input);
+
+        // Set up the buttons
+        builder.setPositiveButton("Add", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                inputMethodManager.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), InputMethodManager.HIDE_NOT_ALWAYS);
+                String s = input.getText().toString().trim();
+                try {
+                    if (s.isEmpty()) {
+                        Toast.makeText(getApplicationContext(), "Oy! Write something.", Toast.LENGTH_LONG).show();
+                        throw new Exception();
+                    }
+//                        for (Learning learning : arrayList) {
+//                            if (learning.getData().equals(s)) {
+//                                Toast.makeText(getApplicationContext(), "This one already exists.", Toast.LENGTH_LONG).show();
+//                                throw new Exception();
+//                            }
+//                        }
+                    arrayList.add(new Learning(s));
+                    lastUpdated = new Date();
+
+                    if (mLearnings != null) {
+                        mlastUpdated.setValue(lastUpdated);
+                        mLearnings.setValue(arrayList.getArrayList());
+                        Log.d("AB:", "onClick: " + mLearnings.toString());
+                        Log.d("AB:", "arrayList: " + arrayList.toString());
                     }
 
+                    Log.d("AB", "Array List updated on " + lastUpdated.toString());
+                } catch (Exception e) {
+                    Log.e("Exception", "File write failed: " + e.toString());
                 }
+            }
+        });
+        builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                dialog.cancel();
+            }
+        });
 
-            });
+        builder.show();
+    }
 
+    boolean getATip() {
+        InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        inputMethodManager.hideSoftInputFromWindow(getCurrentFocus().getWindowToken(), InputMethodManager.HIDE_NOT_ALWAYS);
+        if (arrayList.size() > 0) {
+            int x = (int) (Math.random() * arrayList.size());
+            assert textView != null;
+            textView.setText(arrayList.get(x).getData());
+            return true;
         }
 
-
+        return false;
     }
 
 
@@ -291,7 +344,7 @@ public class MainActivity extends AppCompatActivity {
                 // Google Sign In was successful, authenticate with Firebase
                 GoogleSignInAccount account = result.getSignInAccount();
                 firebaseAuthWithGoogle(account);
-                Toast.makeText(getApplicationContext(), "Successfully Signed In", Toast.LENGTH_LONG).show();
+                Toast.makeText(getApplicationContext(), "Successfully Signed In", Toast.LENGTH_SHORT).show();
             } else {
                 // Google Sign In failed, update UI appropriately
                 Toast.makeText(getApplicationContext(), "Couldn't sign in ", Toast.LENGTH_LONG).show();
@@ -324,12 +377,20 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onStart() {
+        mAuth.addAuthStateListener(mAuthListener);
         super.onStart();
         if (user != null) {
             uname.setText(user.getDisplayName());
         }
     }
 
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (mAuthListener != null) {
+            mAuth.removeAuthStateListener(mAuthListener);
+        }
+    }
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
@@ -340,15 +401,24 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        switch (item.getItemId()) {
-            case R.id.signin: {
-                signIn();
-                return true;
-            }
-            default:
-                return super.onOptionsItemSelected(item);
+        if(mToggle.onOptionsItemSelected(item))
+            return true;
 
+        else
+            return super.onOptionsItemSelected(item);
+
+    }
+
+    @Override
+    public boolean onNavigationItemSelected(@NonNull MenuItem item) {
+        int id = item.getItemId();
+
+        if (id == R.id.nav_tips) {
+            Intent intent = new Intent(MainActivity.this, TipListActivity.class);
+            startActivity(intent);
+        } else if(id == R.id.nav_account) {
+            signIn();
         }
-
+        return true;
     }
 }
